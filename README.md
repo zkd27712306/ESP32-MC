@@ -1,6 +1,6 @@
 # ESP32MC Server
 
-在(https://github.com/GYGKHD/ESP32-MC)，上进行优化，解决很多bug，经测试使用esp32s3_n16r8可以正常运行超过30分钟
+在[ESP32-MC](https://github.com/GYGKHD/ESP32-MC)，上进行优化，解决很多bug，经测试使用esp32s3_n16r8可以正常运行超过30分钟
 
 一个跑在 ESP32S3 上的极简 Minecraft Java 服务器。
 
