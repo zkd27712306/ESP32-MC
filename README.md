@@ -2,7 +2,7 @@
 
 在[ESP32-MC](https://github.com/GYGKHD/ESP32-MC)，上进行优化，解决很多bug（合成时崩溃等），创造一些功能（新增!give命令），经测试使用esp32s3_n16r8可以正常运行超过30分钟。
 
-这块版拥有8mb的psram，但是我经过调试不能正常使用，所以仅在platformio.ini文件增加board_build.psram = enable让系统初始化。剩下的是网络优化。
+这块版拥有8mb的PSRAM，但是我经过调试不能正常使用，所以仅在platformio.ini文件增加board_build.psram = enable让系统初始化。剩下的是网络优化。
 
 下面是原介绍（已更改）
 
