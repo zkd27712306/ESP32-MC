@@ -66,7 +66,7 @@
 
 启动时串口会输出网络状态、IP 地址和启动信息，方便排查。
 
-或者直接下载[`编译文件`](https://github.com/zkd27712306/ESP32-MC/releases)，并使用烧录工具（如ESPWebTool）把程序直接烧录到你的开发板。
+或者直接下载[ESP32-MC Releases](https://github.com/zkd27712306/ESP32-MC/releases)，并使用烧录工具（如ESPWebTool）把程序直接烧录到你的开发板。
 
 ### WiFi 配置
 
