@@ -1,6 +1,6 @@
 # ESP32MC Server
 
-在[ESP32-MC](https://github.com/GYGKHD/ESP32-MC)，上进行优化，解决很多bug，经测试使用esp32s3_n16r8可以正常运行超过30分钟
+在[ESP32-MC](https://github.com/GYGKHD/ESP32-MC)，上进行优化，解决很多bug（合成时崩溃等），创造一些功能（新增!give命令），经测试使用esp32s3_n16r8可以正常运行超过30分钟。
 
 这块版拥有8mb的psram，但是我经过调试不能正常使用，所以仅在platformio.ini文件增加board_build.psram = enable让系统初始化。剩下的是网络优化。
 
@@ -10,7 +10,7 @@
 
 这个项目目前主要面向 Arduino ESP32S3 环境，协议版本是 `26.1.2 / 775`。整体思路是尽量用直接、可追踪的实现，把 Minecraft Java 的基础联机和生存逻辑压到一块资源很紧的芯片上。
 
-代码思路参考了 [bareiron](https://github.com/p2r3/bareiron)，但这个仓库已经做了适配和重构，当前主线代码以 `src/` 目录为准。
+代码思路参考了 [bareiron](https://github.com/p2r3/bareiron)，当前主线代码以 `src/` 目录为准。
 
 ## 项目定位
 
@@ -53,7 +53,7 @@
 
 ### 在 ESP32S3 上运行
 
-默认入口是 [`src/src.ino`](src/code.ino)。
+默认入口是 [`src/code.ino`](src/code.ino)。
 
 大致流程：
 
@@ -66,9 +66,11 @@
 
 启动时串口会输出网络状态、IP 地址和启动信息，方便排查。
 
+或者直接下载[`/releases`](releases)，并使用烧录工具（如ESPWebTool）把程序烧录到你的开发板。
+
 ### WiFi 配置
 
-当前可用的稳定方式是热点连接，相关实现见 [`src/wifi_config.cpp`](src/wifi_config.cpp)。
+当前可用的稳定方式是热点连接，相关实现见 [`src/code.ino`](src/code.ino)，wifi连接似乎也可以。
 
 基本用法：
 
@@ -78,7 +80,7 @@
 
 当前主要代码都在 `src/` 目录下：
 
-- [`src/src.ino`](src/src.ino)：Arduino 入口，初始化串口、WiFi、LED 和主循环
+- [`src/code.ino`](src/code.ino)：Arduino 入口，初始化串口、WiFi、LED 和主循环
 - [`src/mc_server.cpp`](src/mc_server.cpp)：服务器主体，连接管理、协议状态机、主要游戏逻辑
 - [`src/packet_srcc.cpp`](src/packet_srcc.cpp)：Minecraft 数据包编解码
 - [`src/network_layer.cpp`](src/network_layer.cpp)：ESP32 网络层封装
