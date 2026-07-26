@@ -1,5 +1,7 @@
 # ESP32MC Server
 
+在https://github.com/GYGKHD/ESP32-MC上进行优化，解决很多bug，经测试使用esp32s3_n16r8可以正常运行超过30分钟
+
 一个跑在 ESP32S3 上的极简 Minecraft Java 服务器。
 
 这个项目目前主要面向 Arduino ESP32S3 环境，协议版本是 `26.1.2 / 775`。整体思路是尽量用直接、可追踪的实现，把 Minecraft Java 的基础联机和生存逻辑压到一块资源很紧的芯片上。
@@ -108,8 +110,6 @@
 
 - [`code/win/`](code/win/)：Windows 调试版
 - `toolchain/`：本地工具链文件
-- `Template/`：最初工程模板
-- `EP1/`：EP1 视频功能实现
 
 ## 开发说明
 
