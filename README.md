@@ -98,4 +98,4 @@
 
 ## 致谢
 
-- 代码思路参考：[bareiron](https://github.com/p2r3/bareiron)
+- 代码优化来源：[ESP32-MC](https://github.com/GYGKHD/ESP32-MC)
