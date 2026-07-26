@@ -2,8 +2,6 @@
 
 在[ESP32-MC](https://github.com/GYGKHD/ESP32-MC)，上进行优化，解决很多bug（合成时崩溃等），创造一些功能（新增!give命令），经测试使用esp32s3_n16r8可以正常运行超过30分钟。
 
-这块版拥有8mb的PSRAM，但是我经过调试不能正常使用，所以仅在platformio.ini文件增加board_build.psram = enable让系统初始化。剩下的是网络优化。
-
 下面是原介绍（已更改）
 
 一个跑在 ESP32S3 上的极简 Minecraft Java 服务器。
@@ -57,7 +55,7 @@
 
 大致流程：
 
-1. 用 Arduino IDE 或兼容的 ESP32 开发环境打开 src/ 目录
+1. 用 Arduino IDE 或兼容的 ESP32 开发环境打开 src/ 目录（不过我用的是Visual Studio Code）
 2. 安装并选择 ESP32S3 对应开发板
 3. 编译并烧录
 4. 设备启动后会打开一个名为ESP32-MC的wifi
@@ -70,7 +68,7 @@
 
 ### WiFi 配置
 
-当前可用的稳定方式是热点连接，相关实现见 [`src/code.ino`](src/code.ino) ，使用wifi进行连接似乎也可以。
+当前可用的稳定方式是热点连接，相关实现见 [`src/code.ino`](src/code.ino) ，我似乎没有完全删除连接wifi的逻辑。
 
 基本用法：
 
