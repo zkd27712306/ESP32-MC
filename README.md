@@ -53,7 +53,7 @@
 
 ### 在 ESP32S3 上运行
 
-默认入口是 [`src/src.ino`](src/src.ino)。
+默认入口是 [`src/src.ino`](src/code.ino)。
 
 大致流程：
 
