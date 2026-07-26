@@ -66,11 +66,11 @@
 
 启动时串口会输出网络状态、IP 地址和启动信息，方便排查。
 
-或者直接下载[`/releases`](releases)，并使用烧录工具（如ESPWebTool）把程序烧录到你的开发板。
+或者直接下载[`编译文件`](/releases)，并使用烧录工具（如ESPWebTool）把程序直接烧录到你的开发板。
 
 ### WiFi 配置
 
-当前可用的稳定方式是热点连接，相关实现见 [`src/code.ino`](src/code.ino)，wifi连接似乎也可以。
+当前可用的稳定方式是热点连接，相关实现见 [`src/code.ino`](src/code.ino) ，使用wifi进行连接似乎也可以。
 
 基本用法：
 
