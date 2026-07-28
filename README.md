@@ -80,7 +80,7 @@
 
 - [`ESP32-MC-main/src/code.ino`](ESP32-MC-main/src/code.ino)：Arduino 入口，初始化串口、WiFi、LED 和主循环
 - [`ESP32-MC-main/src/mc_server.cpp`](ESP32-MC-main/src/mc_server.cpp)：服务器主体，连接管理、协议状态机、主要游戏逻辑
-- [`ESP32-MC-main/src/packet_srcc.cpp`](ESP32-MC-main/src/packet_srcc.cpp)：Minecraft 数据包编解码
+- [`ESP32-MC-main/src/packet_codec.cpp`](ESP32-MC-main/src/packet_codec.cpp)：Minecraft 数据包编解码
 - [`ESP32-MC-main/src/network_layer.cpp`](ESP32-MC-main/src/network_layer.cpp)：ESP32 网络层封装
 - [`ESP32-MC-main/src/procedures.cpp`](ESP32-MC-main/src/procedures.cpp)：玩家行为、方块交互、Mob 和 Tick 相关逻辑
 - [`ESP32-MC-main/src/terrain.cpp`](ESP32-MC-main/src/terrain.cpp)：地形、区块和基础结构生成
@@ -92,7 +92,7 @@
 
 ## 开发说明
 
-- 当前主线代码以 `ESP32-MC-main/src/` 为准。
+- 当前主线代码以 `ESP32-MC-main/src` 为准。
 - `registries.cpp / registries.h` 体积较大，主要是协议相关的静态数据
 - 这个项目的很多设计是为了节省资源和简化调试，不一定追求常见服务端那种完整抽象
 
