@@ -3,6 +3,7 @@
 
 #include "game_types.h"
 
+uint32_t getWorldSeed();
 uint32_t getChunkHash(int16_t x, int16_t z);
 uint8_t getChunkBiome(int16_t x, int16_t z);
 uint8_t getHeightAtFromHash(int rx, int rz, int _x, int _z, uint32_t chunk_hash, uint8_t biome);

@@ -324,12 +324,13 @@ void MinecraftServer::serviceClient_(uint8_t slot_index) {
     return;
   }
 
-  // ====== 如果是 boss_event 包 (0x1D)，直接丢弃 ======
-  if (packet_id == 0x1D) {
-    uint8_t dummy[256];
-    while (recv(slot.fd, (char*)dummy, sizeof(dummy), MSG_DONTWAIT) > 0) {}
-    return;
-  }
+
+if (packet_id == 0x1D) {
+        if (payload_len > 0) {
+            codec.skipBytes((size_t)payload_len);
+        }
+        return;
+    }
 
   bool ok = false;
   switch (slot.state) {
@@ -487,10 +488,9 @@ bool MinecraftServer::handleConfiguration_(ClientSlot& slot, PacketCodec& codec,
 // ============================================================
 
 bool MinecraftServer::handlePlay_(ClientSlot& slot, PacketCodec& codec, int32_t packet_id, int32_t packet_len) {
-  uint8_t slot_idx = (uint8_t)(&slot - clients_);
-  PlayerData* player = nullptr;
-  if (slot.player_index >= 0) player = &player_data[slot.player_index];
-
+    uint8_t slot_idx = (uint8_t)(&slot - clients_);
+    PlayerData* player = nullptr;
+    if (slot.player_index >= 0) player = &player_data[slot.player_index];
   switch (packet_id) {
     case 0x00:
     case 0x0F:
@@ -523,12 +523,19 @@ bool MinecraftServer::handlePlay_(ClientSlot& slot, PacketCodec& codec, int32_t 
       uint8_t on_ground = flags_byte & 0x01;
 
       // 摔落伤害
-      if (on_ground && packet_id != 0x20) {
-        int16_t damage = player->grounded_y - player->y - 3;
-        if (damage > 0 && (GAMEMODE == 0 || GAMEMODE == 2))
-          hurtEntity_(slot_idx, -1, D_fall, (uint8_t)damage);
-        player->grounded_y = player->y;
-      }
+if (on_ground && packet_id != 0x20) {
+    int16_t damage = player->grounded_y - player->y - 3;
+    if (damage > 0 && (GAMEMODE == 0 || GAMEMODE == 2)) {
+        uint8_t feet = getBlockAt(player->x, player->y, player->z);
+        uint8_t waist = getBlockAt(player->x, player->y + 1, player->z);
+        bool in_water = (feet >= B_water && feet <= B_water_7) ||
+                        (waist >= B_water && waist <= B_water_7);
+        if (!in_water) {
+            hurtEntity_(slot_idx, -1, D_fall, (uint8_t)damage);
+        }
+    }
+    player->grounded_y = player->y;
+}
 
       if (packet_id == 0x21) return true;
 
@@ -639,22 +646,107 @@ bool MinecraftServer::handlePlay_(ClientSlot& slot, PacketCodec& codec, int32_t 
       handlePlayerAction_(player, action, (int16_t)bx, (int16_t)by, (int16_t)bz);
       return true;
     }
-
-    case 0x42: { // Use Item On
-      if (!player) return codec.skipBytes((size_t)packet_len);
-      uint8_t hand; if (!codec.readByte(hand)) return false;
-      uint64_t pos_raw; if (!codec.readUint64(pos_raw)) return false;
-      int32_t bx = (int32_t)(pos_raw >> 38);
-      int32_t by = (int32_t)((pos_raw << 52) >> 52);
-      int32_t bz = (int32_t)((pos_raw << 26) >> 38);
-      uint8_t face; if (!codec.readByte(face)) return false;
-      codec.skipBytes(12 + 2); // cursor + inside_block + world_border
-      int32_t sequence; if (!codec.readVarInt(sequence)) return false;
-      PacketCodec pc(slot.fd);
-      sendAcknowledgeBlockChange_(pc, sequence);
-      handlePlayerUseItem_(player, (int16_t)bx, (int16_t)by, (int16_t)bz, face);
-      return true;
+     case 0x42: { // Use Item On
+    if (!player) return codec.skipBytes((size_t)packet_len);
+    uint8_t hand; if (!codec.readByte(hand)) return false;
+    uint64_t pos_raw; if (!codec.readUint64(pos_raw)) return false;
+    int32_t bx = (int32_t)(pos_raw >> 38);
+    int32_t by = (int32_t)((pos_raw << 52) >> 52);
+    int32_t bz = (int32_t)((pos_raw << 26) >> 38);
+    uint8_t face; if (!codec.readByte(face)) return false;
+    codec.skipBytes(12 + 2);
+    int32_t sequence; if (!codec.readVarInt(sequence)) return false;
+    PacketCodec pc(slot.fd);
+    sendAcknowledgeBlockChange_(pc, sequence);
+    
+    // ====== 检查是否手持弓 ======
+    uint16_t held = player->inventory_items[player->hotbar];
+    if (held == I_bow && player->inventory_count[player->hotbar] > 0) {
+        uint8_t arrow_slot = 255;
+        for (uint8_t i = 0; i < 41; i++) {
+            if (player->inventory_items[i] == I_arrow && player->inventory_count[i] > 0) {
+                arrow_slot = i; break;
+            }
+        }
+        if (arrow_slot != 255) {
+            player->inventory_count[arrow_slot]--;
+            if (player->inventory_count[arrow_slot] == 0) player->inventory_items[arrow_slot] = 0;
+            sendSetContainerSlot_(pc, 0, serverSlotToClientSlot(0, arrow_slot), 
+                player->inventory_count[arrow_slot], player->inventory_items[arrow_slot]);
+            
+            int target_entity = -1;
+            float angle = player->yaw * 180.0f / 127.0f;
+            float rad = angle * 3.14159f / 180.0f;
+            int dx_dir = (int)(sin(rad) * 2);
+            int dz_dir = (int)(cos(rad) * 2);
+            
+            for (int d = 1; d < 30; d++) {
+                int16_t tx = player->x + d * dx_dir;
+                int16_t tz = player->z + d * dz_dir;
+                for (int i = 0; i < MAX_MOBS; i++) {
+                    if (mob_data[i].type == 0) continue;
+                    if ((mob_data[i].data & 31) == 0) continue;
+                    int16_t dx = mob_data[i].x - tx;
+                    int16_t dz = mob_data[i].z - tz;
+                    if (dx*dx + dz*dz < 3) {
+                        target_entity = -2 - i;
+                        break;
+                    }
+                }
+                if (target_entity != -1) break;
+            }
+            
+            if (target_entity != -1) {
+                hurtEntity_(target_entity, slot_idx, D_arrow, 8);
+                for (uint8_t i = 0; i < kMaxClients; i++) {
+                    if (!clients_[i].used || clients_[i].state != STATE_PLAY) continue;
+                    PacketCodec oc(clients_[i].fd);
+                    sendEntityEvent_(oc, target_entity, 2);
+                }
+            }
+            return true;
+        }
     }
+    
+    // ====== 水桶倒水（无限水） ======
+if (held == I_water_bucket) {
+    if (face == 255) return true;
+    
+    // ====== 防抖：防止连续点击导致状态混乱 ======
+    static uint32_t last_bucket_time = 0;
+    uint32_t now = millis();
+    if (now - last_bucket_time < 200) {
+        return true;  // 200ms 内只响应一次
+    }
+    last_bucket_time = now;
+    
+    int16_t px = bx, py = by, pz = bz;
+    switch (face) {
+        case 0: py -= 1; break; case 1: py += 1; break;
+        case 2: pz -= 1; break; case 3: pz += 1; break;
+        case 4: px -= 1; break; case 5: px += 1; break;
+    }
+    uint8_t target = getBlockAt(px, py, pz);
+    if (isReplaceableBlock(target)) {
+        makeBlockChange(px, (uint8_t)py, pz, B_water);
+        // 不消耗，保持水桶
+        sendSetContainerSlot_(pc, 0, serverSlotToClientSlot(0, player->hotbar), 1, I_water_bucket);
+        for (uint8_t i = 0; i < kMaxClients; i++) {
+            if (!clients_[i].used || clients_[i].state != STATE_PLAY) continue;
+            PacketCodec oc(clients_[i].fd);
+            sendBlockUpdate_(oc, px, py, pz, B_water);
+        }
+        checkFluidUpdate(px-1, py, pz, getBlockAt(px-1, py, pz));
+        checkFluidUpdate(px+1, py, pz, getBlockAt(px+1, py, pz));
+        checkFluidUpdate(px, py, pz-1, getBlockAt(px, py, pz-1));
+        checkFluidUpdate(px, py, pz+1, getBlockAt(px, py, pz+1));
+    }
+    return true;
+}
+    
+    handlePlayerUseItem_(player, (int16_t)bx, (int16_t)by, (int16_t)bz, face);
+    return true;
+}
 
     case 0x35: { // Set Held Item
       if (!player) return codec.skipBytes((size_t)packet_len);
@@ -883,14 +975,20 @@ case 0x09: { // Chat
     }
 
     case 0x13: { // Close Container
-      if (!player) return codec.skipBytes((size_t)packet_len);
-      int32_t window_id; codec.readVarInt(window_id);
-      for (uint8_t i = 0; i < 9; i++) {
-        if (window_id != 2) givePlayerItem(player, player->craft_items[i], player->craft_count[i]);
+    if (!player) return codec.skipBytes((size_t)packet_len);
+    int32_t window_id; codec.readVarInt(window_id);
+    for (uint8_t i = 0; i < 9; i++) {
+        if (window_id != 2) {
+            uint16_t craft_item = player->craft_items[i];
+            if (craft_item != I_water_bucket && craft_item != I_bucket &&
+                craft_item != I_lava_bucket && craft_item != I_milk_bucket) {
+                givePlayerItem(player, craft_item, player->craft_count[i]);
+            }
+        }
         player->craft_items[i] = 0;
         player->craft_count[i] = 0;
         player->flags &= ~0x80;
-      }
+    }
       givePlayerItem(player, player->flagval_16, player->flagval_8);
       player->flagval_16 = 0;
       player->flagval_8 = 0;
@@ -917,18 +1015,18 @@ case 0x09: { // Chat
       return true;
     }
 
-    case 0x2A: { // Player Command (sprint/sneak)
-      if (!player) return codec.skipBytes((size_t)packet_len);
-      int32_t eid; codec.readVarInt(eid);
-      uint8_t action; codec.readByte(action);
-      int32_t jump_boost; codec.readVarInt(jump_boost);
-      if (action == 0) player->flags |= 0x04;
-      else if (action == 1) player->flags &= ~0x04;
-      else if (action == 3) player->flags |= 0x08;
-      else if (action == 4) player->flags &= ~0x08;
-      broadcastPlayerMetadata_(player);
-      return true;
-    }
+case 0x2A: { // Player Command
+    if (!player) return codec.skipBytes((size_t)packet_len);
+    int32_t eid; codec.readVarInt(eid);
+    uint8_t action; codec.readByte(action);
+    int32_t jump_boost; codec.readVarInt(jump_boost);
+    if (action == 0) player->flags |= 0x04;
+    else if (action == 1) player->flags &= ~0x04;
+    else if (action == 3) player->flags |= 0x08;
+    else if (action == 4) player->flags &= ~0x08;
+    broadcastPlayerMetadata_(player);
+    return true;
+}
 
     case 0x2B: { // Player Input
       if (!player) return codec.skipBytes((size_t)packet_len);
@@ -1254,207 +1352,209 @@ void MinecraftServer::handlePlayerAction_(PlayerData* player, int action, int16_
 }
 
 void MinecraftServer::handlePlayerUseItem_(PlayerData* player, int16_t x, int16_t y, int16_t z, uint8_t face) {
-  uint8_t target = (face == 255) ? 0 : getBlockAt(x, y, z);
-  uint8_t *count = &player->inventory_count[player->hotbar];
-  uint16_t *item = &player->inventory_items[player->hotbar];
-  int pi = slotIndexForPlayer_(player);
-  if (pi < 0) return;
-  PacketCodec pc(clients_[pi].fd);
+    uint8_t target = (face == 255) ? 0 : getBlockAt(x, y, z);
+    uint8_t *count = &player->inventory_count[player->hotbar];
+    uint16_t *item = &player->inventory_items[player->hotbar];
+    int pi = slotIndexForPlayer_(player);
+    if (pi < 0) return;
+    PacketCodec pc(clients_[pi].fd);
 
-  // 非潜行时先处理容器交互
-  if (!(player->flags & 0x04) && face != 255) {
-    if (target == B_crafting_table) {
-      sendOpenScreen_(pc, 12, "Crafting", 8);
-      return;
-    } else if (target == B_furnace) {
-      sendOpenScreen_(pc, 14, "Furnace", 7);
-      return;
-    } else if (target == B_composter && *count > 0) {
-      uint32_t compost_chance = isCompostItem(*item);
-      if (compost_chance != 0) {
-        if ((*count -= 1) == 0) *item = 0;
-        sendSetContainerSlot_(pc, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
-        if (fast_rand() < compost_chance) givePlayerItem(player, I_bone_meal, 1);
+    // ====== 火把放置 ======
+    if (*item == I_torch) {
+        if (face == 255) return;
+        int16_t px = x, py = y, pz = z;
+        switch (face) {
+            case 0: py -= 1; break; case 1: py += 1; break;
+            case 2: pz -= 1; break; case 3: pz += 1; break;
+            case 4: px -= 1; break; case 5: px += 1; break;
+        }
+        uint8_t target_block = getBlockAt(px, py, pz);
+        if (isReplaceableBlock(target_block)) {
+            uint8_t attach_block = getBlockAt(x, y, z);
+            if (!isPassableBlock(attach_block)) {
+                makeBlockChange(px, (uint8_t)py, pz, B_torch);
+                *count -= 1;
+                if (*count == 0) *item = 0;
+                for (uint8_t i = 0; i < kMaxClients; i++) {
+                    if (!clients_[i].used || clients_[i].state != STATE_PLAY) continue;
+                    PacketCodec oc(clients_[i].fd);
+                    sendBlockUpdate_(oc, px, py, pz, B_torch);
+                }
+                sendSetContainerSlot_(pc, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+                return;
+            }
+        }
         return;
-      }
     }
+
+    // 非潜行时先处理容器交互
+    if (!(player->flags & 0x04) && face != 255) {
+        if (target == B_crafting_table) {
+            sendOpenScreen_(pc, 12, "Crafting", 8);
+            return;
+        } else if (target == B_furnace) {
+            sendOpenScreen_(pc, 14, "Furnace", 7);
+            return;
+        } else if (target == B_composter && *count > 0) {
+            uint32_t compost_chance = isCompostItem(*item);
+            if (compost_chance != 0) {
+                if ((*count -= 1) == 0) *item = 0;
+                sendSetContainerSlot_(pc, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+                if (fast_rand() < compost_chance) givePlayerItem(player, I_bone_meal, 1);
+                return;
+            }
+        }
 #ifdef ALLOW_CHESTS
-    else if (target == B_chest) {
-      uint8_t *storage_ptr = nullptr;
-      for (int i = 0; i < block_changes_count; i++) {
-        if (block_changes[i].block != B_chest) continue;
-        if (block_changes[i].x != x || block_changes[i].y != (uint8_t)y || block_changes[i].z != z) continue;
-        storage_ptr = (uint8_t *)(&block_changes[i + 1]);
-        break;
-      }
-      if (storage_ptr == nullptr) return;
-      memcpy(player->craft_items, &storage_ptr, sizeof(storage_ptr));
-      player->flags |= 0x80;
-      sendOpenScreen_(pc, 2, "Chest", 5);
-      for (int i = 0; i < 27; i++) {
-        uint16_t ci; uint8_t cc;
-        memcpy(&ci, storage_ptr + i * 3, 2);
-        memcpy(&cc, storage_ptr + i * 3 + 2, 1);
-        sendSetContainerSlot_(pc, 2, i, cc, ci);
-      }
-      return;
-    }
+        else if (target == B_chest) {
+            uint8_t *storage_ptr = nullptr;
+            for (int i = 0; i < block_changes_count; i++) {
+                if (block_changes[i].block != B_chest) continue;
+                if (block_changes[i].x != x || block_changes[i].y != (uint8_t)y || block_changes[i].z != z) continue;
+                storage_ptr = (uint8_t *)(&block_changes[i + 1]);
+                break;
+            }
+            if (storage_ptr == nullptr) return;
+            memcpy(player->craft_items, &storage_ptr, sizeof(storage_ptr));
+            player->flags |= 0x80;
+            sendOpenScreen_(pc, 2, "Chest", 5);
+            for (int i = 0; i < 27; i++) {
+                uint16_t ci; uint8_t cc;
+                memcpy(&ci, storage_ptr + i * 3, 2);
+                memcpy(&cc, storage_ptr + i * 3 + 2, 1);
+                sendSetContainerSlot_(pc, 2, i, cc, ci);
+            }
+            return;
+        }
 #endif
-  }
-
-  if (*count == 0) return;
-
-  // 骨粉催树
-  if (*item == I_bone_meal && face != 255) {
-    uint8_t target_below = getBlockAt(x, y - 1, z);
-    if (target == B_oak_sapling) {
-      if ((*count -= 1) == 0) *item = 0;
-      sendSetContainerSlot_(pc, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
-      if ((target_below == B_dirt || target_below == B_grass_block || target_below == B_snowy_grass_block || target_below == B_mud) &&
-          (fast_rand() & 3) == 0) {
-        placeTreeStructure(x, (uint8_t)y, z);
-        broadcastBlockChangesInArea_(x - 3, z - 3, x + 3, z + 3);
-      }
-      return;
     }
-  }
 
-  // 吃东西
-  if (canPlayerEat_(player)) {
-    player->flagval_16 = 0;
-    player->flags |= 0x10;
-    return;
-  }
+    if (*count == 0) return;
 
-  // 穿护甲
-  uint8_t armor_slot = getArmorItemSlot_(*item);
-  if (armor_slot != 255) {
-    if (face != 255) return;
-    uint16_t prev_item = player->inventory_items[armor_slot];
-    uint8_t prev_count = player->inventory_count[armor_slot];
-    player->inventory_items[armor_slot] = *item;
-    player->inventory_count[armor_slot] = 1;
-    player->inventory_items[player->hotbar] = prev_item;
-    player->inventory_count[player->hotbar] = prev_count;
-    sendSetContainerSlot_(pc, -2, serverSlotToClientSlot(0, armor_slot), 1, player->inventory_items[armor_slot]);
-    sendSetContainerSlot_(pc, -2, serverSlotToClientSlot(0, player->hotbar), prev_count, prev_item);
-    return;
-  }
+    // 骨粉催树
+    if (*item == I_bone_meal && face != 255) {
+        uint8_t target_below = getBlockAt(x, y - 1, z);
+        if (target == B_oak_sapling) {
+            if ((*count -= 1) == 0) *item = 0;
+            sendSetContainerSlot_(pc, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+            if ((target_below == B_dirt || target_below == B_grass_block || target_below == B_snowy_grass_block || target_below == B_mud) &&
+                (fast_rand() & 3) == 0) {
+                placeTreeStructure(x, (uint8_t)y, z);
+                broadcastBlockChangesInArea_(x - 3, z - 3, x + 3, z + 3);
+            }
+            return;
+        }
+    }
 
-  // 放方块
-  if (face == 255) return;
-  uint8_t block = I_to_B(*item);
-  if (block == 0) return;
+    // 吃东西
+    if (canPlayerEat_(player)) {
+        player->flagval_16 = 0;
+        player->flags |= 0x10;
+        return;
+    }
 
-  switch (face) {
-    case 0: y -= 1; break; case 1: y += 1; break;
-    case 2: z -= 1; break; case 3: z += 1; break;
-    case 4: x -= 1; break; case 5: x += 1; break;
-    default: break;
-  }
+    // 放方块
+    if (face == 255) return;
+    uint8_t block = I_to_B(*item);
+    if (block == 0) return;
 
-  if (!isPassableBlock(block) && x == player->x && (y == player->y || y == player->y + 1) && z == player->z) return;
+    switch (face) {
+        case 0: y -= 1; break; case 1: y += 1; break;
+        case 2: z -= 1; break; case 3: z += 1; break;
+        case 4: x -= 1; break; case 5: x += 1; break;
+        default: break;
+    }
 
-  if (isReplaceableBlock(getBlockAt(x, y, z)) && (!isColumnBlock(block) || getBlockAt(x, y - 1, z) != B_air)) {
-    if (makeBlockChange(x, (uint8_t)y, z, block)) return;
-    *count -= 1;
-    if (*count == 0) *item = 0;
+    if (!isPassableBlock(block) && x == player->x && (y == player->y || y == player->y + 1) && z == player->z) return;
+
+    if (isReplaceableBlock(getBlockAt(x, y, z)) && (!isColumnBlock(block) || getBlockAt(x, y - 1, z) != B_air)) {
+        if (makeBlockChange(x, (uint8_t)y, z, block)) return;
+        *count -= 1;
+        if (*count == 0) *item = 0;
 
 #ifdef DO_FLUID_FLOW
-    checkFluidUpdate(x, y + 1, z, getBlockAt(x, y + 1, z));
-    checkFluidUpdate(x - 1, (uint8_t)y, z, getBlockAt(x - 1, y, z));
-    checkFluidUpdate(x + 1, (uint8_t)y, z, getBlockAt(x + 1, y, z));
-    checkFluidUpdate(x, (uint8_t)y, z - 1, getBlockAt(x, y, z - 1));
-    checkFluidUpdate(x, (uint8_t)y, z + 1, getBlockAt(x, y, z + 1));
+        checkFluidUpdate(x, y + 1, z, getBlockAt(x, y + 1, z));
+        checkFluidUpdate(x - 1, (uint8_t)y, z, getBlockAt(x - 1, y, z));
+        checkFluidUpdate(x + 1, (uint8_t)y, z, getBlockAt(x + 1, y, z));
+        checkFluidUpdate(x, (uint8_t)y, z - 1, getBlockAt(x, y, z - 1));
+        checkFluidUpdate(x, (uint8_t)y, z + 1, getBlockAt(x, y, z + 1));
 #endif
 
-    for (uint8_t i = 0; i < kMaxClients; i++) {
-      if (!clients_[i].used || clients_[i].state != STATE_PLAY) continue;
-      PacketCodec oc(clients_[i].fd);
-      sendBlockUpdate_(oc, x, y, z, block);
+        for (uint8_t i = 0; i < kMaxClients; i++) {
+            if (!clients_[i].used || clients_[i].state != STATE_PLAY) continue;
+            PacketCodec oc(clients_[i].fd);
+            sendBlockUpdate_(oc, x, y, z, block);
+        }
     }
-  }
 
-  sendSetContainerSlot_(pc, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+    sendSetContainerSlot_(pc, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
 }
 
 void MinecraftServer::hurtEntity_(int entity_id, int attacker_slot, uint8_t damage_type, uint8_t damage) {
-  // --- Mob 伤害处理 ---
-  if (entity_id <= -2) {
-    int mob_idx = -2 - entity_id;
-    if (mob_idx < 0 || mob_idx >= MAX_MOBS) return;
-    if (mob_data[mob_idx].type == 0) return;
+    // --- Mob 伤害处理 ---
+    if (entity_id <= -2) {
+        int mob_idx = -2 - entity_id;
+        if (mob_idx < 0 || mob_idx >= MAX_MOBS) return;
+        if (mob_data[mob_idx].type == 0) return;
 
-    // 攻击冷却 & 武器加成
-    if (attacker_slot >= 0 && attacker_slot < kMaxClients && clients_[attacker_slot].player_index >= 0) {
-      PlayerData* attacker = &player_data[clients_[attacker_slot].player_index];
-      if (attacker->flags & 0x01) return;
-      uint16_t held = attacker->inventory_items[attacker->hotbar];
-      if (held == I_wooden_sword || held == I_golden_sword) damage *= 4;
-      else if (held == I_stone_sword) damage *= 5;
-      else if (held == I_iron_sword) damage *= 6;
-      else if (held == I_diamond_sword) damage *= 7;
-      attacker->flags |= 0x01; attacker->flagval_8 = 0;
-    }
-
-    uint8_t hp = mob_data[mob_idx].data & 31;
-    if (hp <= damage) {
-      mob_data[mob_idx].data &= ~31;  // hp = 0, 标记死亡
-      mob_data[mob_idx].y = 0;        // 重置死亡计时器
-
-      // 掉落物直接给击杀者
-      PlayerData* killer = nullptr;
-      if (attacker_slot >= 0 && attacker_slot < kMaxClients && clients_[attacker_slot].player_index >= 0)
-        killer = &player_data[clients_[attacker_slot].player_index];
-      if (killer) {
-        uint32_t r = fast_rand();
-        switch (mob_data[mob_idx].type) {
-          case 26:  // Chicken
-            givePlayerItem(killer, I_chicken, 1);
-            break;
-          case 30:  // Cow
-            givePlayerItem(killer, I_beef, 1 + (r % 3));
-            break;
-          case 100:  // Pig
-            givePlayerItem(killer, I_porkchop, 1 + (r % 3));
-            break;
-          case 111:  // Sheep
-            givePlayerItem(killer, I_mutton, 1 + (r & 1));
-            break;
-          case 150:  // Zombie
-            givePlayerItem(killer, I_rotten_flesh, r % 3);
-            break;
-          case 115:  // Skeleton
-            givePlayerItem(killer, I_bone, 1 + (r & 1));
-            if ((r >> 2) & 1) givePlayerItem(killer, I_arrow, 1 + (r & 1));
-            break;
-          case 124:  // Spider
-            if ((r >> 2) & 1) givePlayerItem(killer, I_string, 1 + (r & 1));
-            break;
-          default:
-            break;
+        if (attacker_slot >= 0 && attacker_slot < kMaxClients && clients_[attacker_slot].player_index >= 0) {
+            PlayerData* attacker = &player_data[clients_[attacker_slot].player_index];
+            if (attacker->flags & 0x01) return;
+            uint16_t held = attacker->inventory_items[attacker->hotbar];
+            if (held == I_wooden_sword || held == I_golden_sword) damage *= 4;
+            else if (held == I_stone_sword) damage *= 5;
+            else if (held == I_iron_sword) damage *= 6;
+            else if (held == I_diamond_sword) damage *= 7;
+            else if (held == I_netherite_sword) damage *= 8;
+            else if (held == I_mace) damage *= 10;
+            attacker->flags |= 0x01; attacker->flagval_8 = 0;
         }
-      }
-    } else {
-      mob_data[mob_idx].data = (mob_data[mob_idx].data & ~31) | (hp - damage);
+
+        uint8_t hp = mob_data[mob_idx].data & 31;
+        if (hp <= damage) {
+            mob_data[mob_idx].data &= ~31;
+            mob_data[mob_idx].y = 0;
+
+            PlayerData* killer = nullptr;
+            if (attacker_slot >= 0 && attacker_slot < kMaxClients && clients_[attacker_slot].player_index >= 0)
+                killer = &player_data[clients_[attacker_slot].player_index];
+            if (killer) {
+                uint32_t r = fast_rand();
+                switch (mob_data[mob_idx].type) {
+                    case 26: givePlayerItem(killer, I_chicken, 1); break;
+                    case 30: givePlayerItem(killer, I_beef, 1 + (r % 3)); break;
+                    case 100: givePlayerItem(killer, I_porkchop, 1 + (r % 3)); break;
+                    case 111: givePlayerItem(killer, I_mutton, 1 + (r & 1)); break;
+                    case 150: givePlayerItem(killer, I_rotten_flesh, r % 3); break;
+                    case 115: givePlayerItem(killer, I_bone, 1 + (r & 1));
+                              if ((r >> 2) & 1) givePlayerItem(killer, I_arrow, 1 + (r & 1)); break;
+                    case 124: if ((r >> 2) & 1) givePlayerItem(killer, I_string, 1 + (r & 1)); break;
+                    default: break;
+                }
+            }
+        } else {
+            mob_data[mob_idx].data = (mob_data[mob_idx].data & ~31) | (hp - damage);
+        }
+
+        for (uint8_t i = 0; i < kMaxClients; i++) {
+            if (!clients_[i].used || clients_[i].state != STATE_PLAY) continue;
+            PacketCodec oc(clients_[i].fd);
+            sendDamageEvent_(oc, entity_id, damage_type);
+            if ((mob_data[mob_idx].data & 31) == 0) sendEntityEvent_(oc, entity_id, 3);
+        }
+        return;
     }
 
-    for (uint8_t i = 0; i < kMaxClients; i++) {
-      if (!clients_[i].used || clients_[i].state != STATE_PLAY) continue;
-      PacketCodec oc(clients_[i].fd);
-      sendDamageEvent_(oc, entity_id, damage_type);
-      if ((mob_data[mob_idx].data & 31) == 0) sendEntityEvent_(oc, entity_id, 3);
-    }
-    return;
-  }
+// --- 玩家伤害处理 ---
+if (entity_id < 0 || entity_id >= kMaxClients) return;
+if (!clients_[entity_id].used || clients_[entity_id].player_index < 0) return;
+PlayerData* player = &player_data[clients_[entity_id].player_index];
+if (player->health == 0) return;
 
-  // --- 玩家伤害处理 ---
-  if (entity_id < 0 || entity_id >= kMaxClients) return;
-  if (!clients_[entity_id].used || clients_[entity_id].player_index < 0) return;
-  PlayerData* player = &player_data[clients_[entity_id].player_index];
-  if (player->health == 0) return;
+// ====== 护甲减伤 ======
+damage = applyArmorReduction(player, damage);
 
-  if (attacker_slot >= 0 && attacker_slot < kMaxClients && clients_[attacker_slot].player_index >= 0) {
+// 攻击者伤害加成
+if (attacker_slot >= 0 && attacker_slot < kMaxClients && clients_[attacker_slot].player_index >= 0) {
     PlayerData* attacker = &player_data[clients_[attacker_slot].player_index];
     if (attacker->flags & 0x01) return;
     uint16_t held = attacker->inventory_items[attacker->hotbar];
@@ -1462,21 +1562,25 @@ void MinecraftServer::hurtEntity_(int entity_id, int attacker_slot, uint8_t dama
     else if (held == I_stone_sword) damage *= 5;
     else if (held == I_iron_sword) damage *= 6;
     else if (held == I_diamond_sword) damage *= 7;
+    else if (held == I_netherite_sword) damage *= 8;
+    else if (held == I_mace) damage *= 10;
     attacker->flags |= 0x01; attacker->flagval_8 = 0;
-  }
+}
 
-  if (player->health <= damage) player->health = 0;
-  else player->health -= damage;
+if (damage == 0) return;
 
-  PacketCodec pc(clients_[entity_id].fd);
-  sendSetHealth_(pc, player->health, player->hunger, player->saturation);
+if (player->health <= damage) player->health = 0;
+else player->health -= damage;
 
-  for (uint8_t i = 0; i < kMaxClients; i++) {
+PacketCodec pc(clients_[entity_id].fd);
+sendSetHealth_(pc, player->health, player->hunger, player->saturation);
+
+for (uint8_t i = 0; i < kMaxClients; i++) {
     if (!clients_[i].used || clients_[i].state != STATE_PLAY) continue;
     PacketCodec oc(clients_[i].fd);
     sendDamageEvent_(oc, entity_id, damage_type);
     if (player->health == 0) sendEntityEvent_(oc, entity_id, 3);
-  }
+}
 }
 
 void MinecraftServer::broadcastPlayerMetadata_(PlayerData* player) {
@@ -1505,133 +1609,132 @@ void MinecraftServer::broadcastPlayerMetadata_(PlayerData* player) {
 }
 
 bool MinecraftServer::handleClickContainer_(uint8_t slot_idx, PacketCodec& codec, int32_t packet_len) {
-  ClientSlot& slot = clients_[slot_idx];
-  PlayerData* player = (slot.player_index >= 0) ? &player_data[slot.player_index] : nullptr;
-  if (!player) return codec.skipBytes((size_t)packet_len);
+    ClientSlot& slot = clients_[slot_idx];
+    PlayerData* player = (slot.player_index >= 0) ? &player_data[slot.player_index] : nullptr;
+    if (!player) return codec.skipBytes((size_t)packet_len);
 
-  int32_t window_id; codec.readVarInt(window_id);
-  int32_t state_id; codec.readVarInt(state_id);
-  uint16_t clicked_slot_raw; codec.readUint16(clicked_slot_raw);
-  int16_t clicked_slot = (int16_t)clicked_slot_raw;
-  uint8_t button; codec.readByte(button);
-  int32_t mode_i; codec.readVarInt(mode_i);
-  uint8_t mode = (uint8_t)mode_i;
-  int32_t changes_count; codec.readVarInt(changes_count);
+    int32_t window_id; codec.readVarInt(window_id);
+    int32_t state_id; codec.readVarInt(state_id);
+    uint16_t clicked_slot_raw; codec.readUint16(clicked_slot_raw);
+    int16_t clicked_slot = (int16_t)clicked_slot_raw;
+    uint8_t button; codec.readByte(button);
+    int32_t mode_i; codec.readVarInt(mode_i);
+    uint8_t mode = (uint8_t)mode_i;
+    int32_t changes_count; codec.readVarInt(changes_count);
 
-  PacketCodec pc(slot.fd);
-  uint8_t apply_changes = 1;
+    PacketCodec pc(slot.fd);
+    uint8_t apply_changes = 1;
 
-  // 点击合成输出槽 (slot 0) 时由服务器处理, 不接受客户端的变化
-  if ((window_id == 0 || window_id == 12) && clicked_slot == 0 && mode == 0) {
-    uint8_t out_count; uint16_t out_item;
-    getCraftingOutput(player, &out_count, &out_item);
-    if (out_item != 0 && out_count > 0) {
-      // 消耗合成格材料
-      for (int i = 0; i < 9; i++) {
-        if (player->craft_items[i] != 0) {
-          player->craft_count[i]--;
-          if (player->craft_count[i] == 0) player->craft_items[i] = 0;
+    // ====== 点击合成输出槽 ======
+    if ((window_id == 0 || window_id == 12) && clicked_slot == 0 && mode == 0) {
+        uint8_t out_count; uint16_t out_item;
+        getCraftingOutput(player, &out_count, &out_item);
+        if (out_item != 0 && out_count > 0) {
+            for (int i = 0; i < 9; i++) {
+                if (player->craft_items[i] != 0) {
+                    player->craft_count[i]--;
+                    if (player->craft_count[i] == 0) player->craft_items[i] = 0;
+                }
+            }
+            if (player->flagval_16 == 0) {
+                player->flagval_16 = out_item;
+                player->flagval_8 = out_count;
+            } else if (player->flagval_16 == out_item) {
+                player->flagval_8 += out_count;
+            }
+            uint8_t new_count; uint16_t new_item;
+            getCraftingOutput(player, &new_count, &new_item);
+            sendSetContainerSlot_(pc, window_id, 0, new_count, new_item);
+            for (int i = 0; i < 9; i++) {
+                uint16_t cs = serverSlotToClientSlot(window_id, 41 + i);
+                sendSetContainerSlot_(pc, window_id, cs, player->craft_count[i], player->craft_items[i]);
+            }
         }
-      }
-      // 把产物给玩家鼠标
-      if (player->flagval_16 == 0) {
-        player->flagval_16 = out_item;
-        player->flagval_8 = out_count;
-      } else if (player->flagval_16 == out_item) {
-        player->flagval_8 += out_count;
-      }
-      // 重新计算合成输出并同步
-      uint8_t new_count; uint16_t new_item;
-      getCraftingOutput(player, &new_count, &new_item);
-      sendSetContainerSlot_(pc, window_id, 0, new_count, new_item);
-      for (int i = 0; i < 9; i++) {
-        uint16_t cs = serverSlotToClientSlot(window_id, 41 + i);
-        sendSetContainerSlot_(pc, window_id, cs, player->craft_count[i], player->craft_items[i]);
-      }
+        apply_changes = 0;
     }
-    // 读完剩余数据 (changes + cursor)
-    apply_changes = 0;
-  }
 
-  if (mode == 4 && clicked_slot != -999) {
-    uint8_t s = clientSlotToServerSlot(window_id, (uint8_t)clicked_slot);
-    sendSetContainerSlot_(pc, window_id, clicked_slot_raw, player->inventory_count[s], player->inventory_items[s]);
-    apply_changes = 0;
-  } else if (mode == 0 && clicked_slot == -999) {
-    if (button == 0) {
-      givePlayerItem(player, player->flagval_16, player->flagval_8);
-      player->flagval_16 = 0; player->flagval_8 = 0;
+    // ====== 模式4 ======
+    if (mode == 4 && clicked_slot != -999) {
+        uint8_t s = clientSlotToServerSlot(window_id, (uint8_t)clicked_slot);
+        sendSetContainerSlot_(pc, window_id, clicked_slot_raw, player->inventory_count[s], player->inventory_items[s]);
+        apply_changes = 0;
+    } else if (mode == 0 && clicked_slot == -999) {
+        if (button == 0) {
+            givePlayerItem(player, player->flagval_16, player->flagval_8);
+            player->flagval_16 = 0; player->flagval_8 = 0;
+        } else {
+            givePlayerItem(player, player->flagval_16, 1);
+            player->flagval_8 -= 1;
+            if (player->flagval_8 == 0) player->flagval_16 = 0;
+        }
+        apply_changes = 0;
+    }
+
+    // ====== 处理 changes ======
+    for (int32_t i = 0; i < changes_count; i++) {
+        uint16_t change_slot; codec.readUint16(change_slot);
+        uint8_t s = clientSlotToServerSlot(window_id, (uint8_t)change_slot);
+
+        uint16_t *p_item = nullptr;
+        uint8_t *p_count = nullptr;
+        if (s < 41) {
+            p_item = &player->inventory_items[s];
+            p_count = &player->inventory_count[s];
+        } else if (s >= 41 && s <= 49) {
+            p_item = &player->craft_items[s - 41];
+            p_count = &player->craft_count[s - 41];
+        }
+
+        uint8_t has_item; codec.readByte(has_item);
+        if (!has_item) {
+            if (p_item && apply_changes) { *p_item = 0; *p_count = 0; }
+            continue;
+        }
+        int32_t item_id; codec.readVarInt(item_id);
+        int32_t item_count; codec.readVarInt(item_count);
+        int32_t comp_add; codec.readVarInt(comp_add);
+        for (int32_t c = 0; c < comp_add; c++) { int32_t t; codec.readVarInt(t); codec.skipBytes(1); }
+        int32_t comp_rem; codec.readVarInt(comp_rem);
+        for (int32_t c = 0; c < comp_rem; c++) { int32_t t; codec.readVarInt(t); }
+
+        if (item_count > 0 && apply_changes && p_item) {
+            *p_item = (uint16_t)item_id;
+            *p_count = (uint8_t)item_count;
+        }
+    }
+
+    // ====== 重新计算合成 ======
+    if (window_id == 0 || window_id == 12) {
+        uint8_t out_count; uint16_t out_item;
+        getCraftingOutput(player, &out_count, &out_item);
+        sendSetContainerSlot_(pc, window_id, 0, out_count, out_item);
+    } else if (window_id == 14) {
+        getSmeltingOutput(player);
+        for (int i = 0; i < 3; i++)
+            sendSetContainerSlot_(pc, window_id, i, player->craft_count[i], player->craft_items[i]);
+    }
+
+    // ====== 鼠标物品 ======
+    uint8_t has_cursor; codec.readByte(has_cursor);
+    if (has_cursor) {
+        int32_t cursor_item; codec.readVarInt(cursor_item);
+        int32_t cursor_count; codec.readVarInt(cursor_count);
+        if (apply_changes) {
+            player->flagval_16 = (uint16_t)cursor_item;
+            player->flagval_8 = (uint8_t)cursor_count;
+        }
+        int32_t ca; codec.readVarInt(ca);
+        for (int32_t c = 0; c < ca; c++) { int32_t t; codec.readVarInt(t); codec.skipBytes(1); }
+        int32_t cr; codec.readVarInt(cr);
+        for (int32_t c = 0; c < cr; c++) { int32_t t; codec.readVarInt(t); }
     } else {
-      givePlayerItem(player, player->flagval_16, 1);
-      player->flagval_8 -= 1;
-      if (player->flagval_8 == 0) player->flagval_16 = 0;
-    }
-    apply_changes = 0;
-  }
-
-  uint8_t craft = 0;
-  for (int32_t i = 0; i < changes_count; i++) {
-    uint16_t change_slot; codec.readUint16(change_slot);
-    uint8_t s = clientSlotToServerSlot(window_id, (uint8_t)change_slot);
-
-    uint16_t *p_item;
-    uint8_t  *p_count;
-    if (s < 41) {
-      p_item  = &player->inventory_items[s];
-      p_count = &player->inventory_count[s];
-    } else if (s < 50) {
-      // 合成格 41-49 -> craft_items[0-8]
-      p_item  = &player->craft_items[s - 41];
-      p_count = &player->craft_count[s - 41];
-    } else {
-      p_item  = nullptr;
-      p_count = nullptr;
+        if (apply_changes) {
+            player->flagval_16 = 0;
+            player->flagval_8 = 0;
+        }
     }
 
-    uint8_t has_item; codec.readByte(has_item);
-    if (!has_item) {
-      if (p_item && apply_changes) { *p_item = 0; *p_count = 0; }
-      continue;
-    }
-    int32_t item_id; codec.readVarInt(item_id);
-    int32_t item_count; codec.readVarInt(item_count);
-    int32_t comp_add; codec.readVarInt(comp_add);
-    for (int32_t c = 0; c < comp_add; c++) { int32_t t; codec.readVarInt(t); codec.skipBytes(1); }
-    int32_t comp_rem; codec.readVarInt(comp_rem);
-    for (int32_t c = 0; c < comp_rem; c++) { int32_t t; codec.readVarInt(t); }
-
-    if (item_count > 0 && apply_changes && p_item) {
-      *p_item  = (uint16_t)item_id;
-      *p_count = (uint8_t)item_count;
-    }
-  }
-
-  if (window_id == 0 || window_id == 12) {
-    uint8_t out_count; uint16_t out_item;
-    getCraftingOutput(player, &out_count, &out_item);
-    sendSetContainerSlot_(pc, window_id, 0, out_count, out_item);
-  } else if (window_id == 14) {
-    getSmeltingOutput(player);
-    for (int i = 0; i < 3; i++)
-      sendSetContainerSlot_(pc, window_id, i, player->craft_count[i], player->craft_items[i]);
-  }
-
-  // 鼠标物品
-  uint8_t has_cursor; codec.readByte(has_cursor);
-  if (has_cursor) {
-    int32_t cursor_item; codec.readVarInt(cursor_item);
-    int32_t cursor_count; codec.readVarInt(cursor_count);
-    player->flagval_16 = (uint16_t)cursor_item;
-    player->flagval_8 = (uint8_t)cursor_count;
-    int32_t ca; codec.readVarInt(ca);
-    for (int32_t c = 0; c < ca; c++) { int32_t t; codec.readVarInt(t); codec.skipBytes(1); }
-    int32_t cr; codec.readVarInt(cr);
-    for (int32_t c = 0; c < cr; c++) { int32_t t; codec.readVarInt(t); }
-  } else {
-    player->flagval_16 = 0; player->flagval_8 = 0;
-  }
-
-  return true;
+    return true;
 }
 
 bool MinecraftServer::canPlayerEat_(PlayerData* player) {
@@ -1682,13 +1785,25 @@ void MinecraftServer::doPlayerEat_(PlayerData* player) {
 }
 
 uint8_t MinecraftServer::getArmorItemSlot_(uint16_t item) {
-  switch (item) {
-    case I_leather_helmet: case I_iron_helmet: case I_golden_helmet: case I_diamond_helmet: return 39;
-    case I_leather_chestplate: case I_iron_chestplate: case I_golden_chestplate: case I_diamond_chestplate: return 38;
-    case I_leather_leggings: case I_iron_leggings: case I_golden_leggings: case I_diamond_leggings: return 37;
-    case I_leather_boots: case I_iron_boots: case I_golden_boots: case I_diamond_boots: return 36;
-    default: return 255;
-  }
+    switch (item) {
+        case I_leather_helmet: case I_iron_helmet:
+        case I_golden_helmet: case I_diamond_helmet:
+        case I_netherite_helmet:
+            return 39;
+        case I_leather_chestplate: case I_iron_chestplate:
+        case I_golden_chestplate: case I_diamond_chestplate:
+        case I_netherite_chestplate:
+            return 38;
+        case I_leather_leggings: case I_iron_leggings:
+        case I_golden_leggings: case I_diamond_leggings:
+        case I_netherite_leggings:
+            return 37;
+        case I_leather_boots: case I_iron_boots:
+        case I_golden_boots: case I_diamond_boots:
+        case I_netherite_boots:
+            return 36;
+        default: return 255;
+    }
 }
 
 void MinecraftServer::broadcastBlockChangesInArea_(int16_t x1, int16_t z1, int16_t x2, int16_t z2) {
@@ -1710,163 +1825,286 @@ void MinecraftServer::broadcastBlockChangesInArea_(int16_t x1, int16_t z1, int16
 // ============================================================
 
 void MinecraftServer::tickMobs_() {
-  for (int i = 0; i < MAX_MOBS; i++) {
-    if (mob_data[i].type == 0) continue;
-    int entity_id = -2 - i;
+    for (int i = 0; i < MAX_MOBS; i++) {
+        if (mob_data[i].type == 0) continue;
+        int entity_id = -2 - i;
 
-    // 死亡回收
-    if ((mob_data[i].data & 31) == 0) {
-      if (mob_data[i].y < (unsigned int)TICKS_PER_SECOND) { mob_data[i].y++; continue; }
-      mob_data[i].type = 0;
-      for (uint8_t j = 0; j < kMaxClients; j++) {
-        if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
-        PacketCodec oc(clients_[j].fd);
-        sendEntityEvent_(oc, entity_id, 60);
-        sendRemoveEntity_(oc, entity_id);
-      }
-      continue;
-    }
-
-    uint8_t passive = (mob_data[i].type == 26 || mob_data[i].type == 30 ||
-                       mob_data[i].type == 100 || mob_data[i].type == 111);
-
-    // 找最近玩家
-    PlayerData* closest = nullptr;
-    uint32_t closest_dist = 0xFFFFFFFF;
-    for (int j = 0; j < MAX_PLAYERS; j++) {
-      if (player_data[j].client_fd == -1) continue;
-      uint32_t d = abs(mob_data[i].x - player_data[j].x) + abs(mob_data[i].z - player_data[j].z);
-      if (d < closest_dist) { closest_dist = d; closest = &player_data[j]; }
-    }
-
-    if (closest_dist > MOB_DESPAWN_DISTANCE) { mob_data[i].type = 0; continue; }
-
-    if (passive) {
-      uint32_t r = fast_rand();
-      if (r % (4 * (unsigned int)TICKS_PER_SECOND) != 0) continue;
-
-      int16_t new_x = mob_data[i].x, new_z = mob_data[i].z;
-      uint8_t yaw = 0;
-      if ((r >> 2) & 1) { if ((r >> 1) & 1) { new_x += 1; yaw = 192; } else { new_x -= 1; yaw = 64; } }
-      else { if ((r >> 1) & 1) { new_z += 1; yaw = 0; } else { new_z -= 1; yaw = 128; } }
-
-      uint8_t b = getBlockAt(new_x, mob_data[i].y, new_z);
-      if (isPassableBlock(b) && !isPassableBlock(getBlockAt(new_x, mob_data[i].y - 1, new_z))) {
-        mob_data[i].x = new_x; mob_data[i].z = new_z;
-        for (uint8_t j = 0; j < kMaxClients; j++) {
-          if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
-          PacketCodec oc(clients_[j].fd);
-          sendTeleportEntity_(oc, entity_id, new_x + 0.5, mob_data[i].y, new_z + 0.5, yaw * 360.0f / 256, 0);
+        if ((mob_data[i].data & 31) == 0) {
+            if (mob_data[i].y < (unsigned int)TICKS_PER_SECOND) { mob_data[i].y++; continue; }
+            mob_data[i].type = 0;
+            for (uint8_t j = 0; j < kMaxClients; j++) {
+                if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+                PacketCodec oc(clients_[j].fd);
+                sendEntityEvent_(oc, entity_id, 60);
+                sendRemoveEntity_(oc, entity_id);
+            }
+            continue;
         }
-      }
-    } else {
-      if (!closest) continue;
-      if (closest_dist < 3 && abs(mob_data[i].y - closest->y) < 2) {
-        int ci = slotIndexForPlayer_(closest);
-        if (ci >= 0) hurtEntity_(ci, -1, D_generic, 6);
-        continue;
-      }
 
-      int16_t new_x = mob_data[i].x, new_z = mob_data[i].z;
-      if (closest->x < mob_data[i].x) new_x--;
-      else if (closest->x > mob_data[i].x) new_x++;
-      if (closest->z < mob_data[i].z) new_z--;
-      else if (closest->z > mob_data[i].z) new_z++;
+        uint8_t passive = (mob_data[i].type == 26 || mob_data[i].type == 30 ||
+                           mob_data[i].type == 100 || mob_data[i].type == 111);
+        bool is_skeleton = (mob_data[i].type == 115);
+        bool is_creeper = (mob_data[i].type == 32);
+        bool is_spider = (mob_data[i].type == 124);
+        bool is_zombie = (mob_data[i].type == 150);
 
-      uint8_t b = getBlockAt(new_x, mob_data[i].y, new_z);
-      uint8_t b_above = getBlockAt(new_x, mob_data[i].y + 1, new_z);
-      uint8_t b_below = getBlockAt(new_x, mob_data[i].y - 1, new_z);
-      if (isPassableBlock(b) && isPassableBlock(b_above) && !isPassableBlock(b_below)) {
-        mob_data[i].x = new_x; mob_data[i].z = new_z;
-        for (uint8_t j = 0; j < kMaxClients; j++) {
-          if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
-          PacketCodec oc(clients_[j].fd);
-          sendTeleportEntity_(oc, entity_id, new_x + 0.5, mob_data[i].y, new_z + 0.5, 0, 0);
+        PlayerData* closest = nullptr;
+        uint32_t closest_dist = 0xFFFFFFFF;
+        for (int j = 0; j < MAX_PLAYERS; j++) {
+            if (player_data[j].client_fd == -1) continue;
+            uint32_t d = abs(mob_data[i].x - player_data[j].x) + abs(mob_data[i].z - player_data[j].z);
+            if (d < closest_dist) { closest_dist = d; closest = &player_data[j]; }
         }
-      }
+
+        if (closest_dist > MOB_DESPAWN_DISTANCE) { mob_data[i].type = 0; continue; }
+
+        // ====== 苦力怕爆炸 ======
+        if (is_creeper && closest && closest_dist < 10) {
+            uint32_t r = fast_rand();
+            if ((r & 31) == 0) {
+                for (uint8_t j = 0; j < kMaxClients; j++) {
+                    if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+                    PacketCodec oc(clients_[j].fd);
+                    sendEntityEvent_(oc, entity_id, 1);
+                }
+                
+                int damage = 20 + (r & 15);
+                for (int j = 0; j < MAX_PLAYERS; j++) {
+                    if (player_data[j].client_fd == -1) continue;
+                    int16_t dx = player_data[j].x - mob_data[i].x;
+                    int16_t dz = player_data[j].z - mob_data[i].z;
+                    int dist = abs(dx) + abs(dz);
+                    if (dist < 20) {
+                        uint8_t dmg = damage / (1 + dist / 3);
+                        hurtEntity_(j, -1, D_explosion, dmg);
+                    }
+                }
+                // 爆炸破坏方块
+                for (int dx = -3; dx <= 3; dx++) {
+                    for (int dy = -2; dy <= 2; dy++) {
+                        for (int dz = -3; dz <= 3; dz++) {
+                            if (dx*dx + dy*dy + dz*dz < 9) {
+                                uint8_t block = getBlockAt(mob_data[i].x + dx, mob_data[i].y + dy, mob_data[i].z + dz);
+                                if (!isPassableBlock(block) && block != B_bedrock && block != B_water && block != B_lava) {
+                                    makeBlockChange(mob_data[i].x + dx, mob_data[i].y + dy, mob_data[i].z + dz, B_air);
+                                    for (uint8_t j = 0; j < kMaxClients; j++) {
+                                        if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+                                        PacketCodec oc(clients_[j].fd);
+                                        sendBlockUpdate_(oc, mob_data[i].x + dx, mob_data[i].y + dy, mob_data[i].z + dz, B_air);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for (uint8_t j = 0; j < kMaxClients; j++) {
+                    if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+                    PacketCodec oc(clients_[j].fd);
+                    sendRemoveEntity_(oc, entity_id);
+                }
+                mob_data[i].type = 0;
+                continue;
+            }
+        }
+
+        // ====== 骷髅射箭 ======
+        if (is_skeleton && closest && closest_dist < 20 && closest_dist > 3) {
+            uint32_t r = fast_rand();
+            if ((r & 7) == 0) {
+                int damage = 4 + (r & 3);
+                int target_slot = slotIndexForPlayer_(closest);
+                if (target_slot >= 0) {
+                    hurtEntity_(target_slot, -1, D_arrow, damage);
+                }
+                // 箭矢粒子效果
+                for (uint8_t j = 0; j < kMaxClients; j++) {
+                    if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+                    PacketCodec oc(clients_[j].fd);
+                    sendEntityEvent_(oc, entity_id, 4);
+                }
+                if (closest->x < mob_data[i].x) mob_data[i].x++;
+                else if (closest->x > mob_data[i].x) mob_data[i].x--;
+                if (closest->z < mob_data[i].z) mob_data[i].z++;
+                else if (closest->z > mob_data[i].z) mob_data[i].z--;
+                for (uint8_t j = 0; j < kMaxClients; j++) {
+                    if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+                    PacketCodec oc(clients_[j].fd);
+                    sendTeleportEntity_(oc, entity_id, mob_data[i].x + 0.5, mob_data[i].y, mob_data[i].z + 0.5, 0, 0);
+                }
+                continue;
+            }
+        }
+
+        // ====== 蜘蛛攀爬 ======
+        if (is_spider && closest && closest_dist < 10) {
+            uint8_t above = getBlockAt(mob_data[i].x, mob_data[i].y + 1, mob_data[i].z);
+            uint8_t below = getBlockAt(mob_data[i].x, mob_data[i].y - 1, mob_data[i].z);
+            if (isPassableBlock(above) && !isPassableBlock(below)) {
+                mob_data[i].y++;
+                for (uint8_t j = 0; j < kMaxClients; j++) {
+                    if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+                    PacketCodec oc(clients_[j].fd);
+                    sendTeleportEntity_(oc, entity_id, mob_data[i].x + 0.5, mob_data[i].y, mob_data[i].z + 0.5, 0, 0);
+                }
+            }
+        }
+
+        // ====== 僵尸群攻 ======
+        if (is_zombie && closest && closest_dist < 5) {
+            uint32_t r = fast_rand();
+            if ((r & 127) == 0) {
+                int16_t sx = mob_data[i].x + (int16_t)((r & 7) - 3);
+                int16_t sz = mob_data[i].z + (int16_t)(((r >> 4) & 7) - 3);
+                uint8_t sy = mob_data[i].y;
+                spawnMob(150, sx, sy, sz, 20);
+                broadcastMobSpawn_(150, sx, sy, sz);
+            }
+        }
+
+        if (passive) {
+            uint32_t r = fast_rand();
+            if (r % (4 * (unsigned int)TICKS_PER_SECOND) != 0) continue;
+
+            int16_t new_x = mob_data[i].x, new_z = mob_data[i].z;
+            uint8_t yaw = 0;
+            if ((r >> 2) & 1) { if ((r >> 1) & 1) { new_x += 1; yaw = 192; } else { new_x -= 1; yaw = 64; } }
+            else { if ((r >> 1) & 1) { new_z += 1; yaw = 0; } else { new_z -= 1; yaw = 128; } }
+
+            uint8_t b = getBlockAt(new_x, mob_data[i].y, new_z);
+            if (isPassableBlock(b) && !isPassableBlock(getBlockAt(new_x, mob_data[i].y - 1, new_z))) {
+                mob_data[i].x = new_x; mob_data[i].z = new_z;
+                for (uint8_t j = 0; j < kMaxClients; j++) {
+                    if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+                    PacketCodec oc(clients_[j].fd);
+                    sendTeleportEntity_(oc, entity_id, new_x + 0.5, mob_data[i].y, new_z + 0.5, yaw * 360.0f / 256, 0);
+                }
+            }
+        } else if (!is_skeleton && !is_creeper && !is_spider) {
+            if (!closest) continue;
+            if (closest_dist < 3 && abs(mob_data[i].y - closest->y) < 2) {
+                int ci = slotIndexForPlayer_(closest);
+                if (ci >= 0) hurtEntity_(ci, -1, D_generic, 6);
+                continue;
+            }
+
+            int16_t new_x = mob_data[i].x, new_z = mob_data[i].z;
+            if (closest->x < mob_data[i].x) new_x--;
+            else if (closest->x > mob_data[i].x) new_x++;
+            if (closest->z < mob_data[i].z) new_z--;
+            else if (closest->z > mob_data[i].z) new_z++;
+
+            uint8_t b = getBlockAt(new_x, mob_data[i].y, new_z);
+            uint8_t b_above = getBlockAt(new_x, mob_data[i].y + 1, new_z);
+            uint8_t b_below = getBlockAt(new_x, mob_data[i].y - 1, new_z);
+            if (isPassableBlock(b) && isPassableBlock(b_above) && !isPassableBlock(b_below)) {
+                mob_data[i].x = new_x; mob_data[i].z = new_z;
+                for (uint8_t j = 0; j < kMaxClients; j++) {
+                    if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+                    PacketCodec oc(clients_[j].fd);
+                    sendTeleportEntity_(oc, entity_id, new_x + 0.5, mob_data[i].y, new_z + 0.5, 0, 0);
+                }
+            }
+        }
     }
-  }
 }
 
 void MinecraftServer::trySpawnMobNearPlayer_(PlayerData* player) {
-  uint32_t r = fast_rand();
-  if ((r & 3) != 0) return;
-
-  int16_t cx = div_floor(player->x, 16);
-  int16_t cz = div_floor(player->z, 16);
-  int16_t mob_x = (cx + ((r & 1) ? ACTIVE_VIEW_DISTANCE : -ACTIVE_VIEW_DISTANCE)) * 16 + ((r >> 4) & 15);
-  int16_t mob_z = (cz + ((r & 2) ? ACTIVE_VIEW_DISTANCE : -ACTIVE_VIEW_DISTANCE)) * 16 + ((r >> 8) & 15);
-
-  uint8_t mob_y = player->y > 8 ? player->y - 8 : 0;
-  for (int tries = 0; tries < 20; tries++) {
-    uint8_t b_low = getBlockAt(mob_x, mob_y - 1, mob_z);
-    uint8_t b_mid = getBlockAt(mob_x, mob_y, mob_z);
-    uint8_t b_top = getBlockAt(mob_x, mob_y + 1, mob_z);
-    if (!isPassableBlock(b_low) && isPassableSpawnBlock(b_mid) && isPassableSpawnBlock(b_top)) break;
-    mob_y++;
-    if (mob_y > 250) return;
-  }
-
-  if ((world_time < 13000 || world_time > 23460) && mob_y > 48) {
-    // 白天地面: 只生成动物
-    uint32_t choice = (r >> 12) & 3;
-    uint8_t type = 26; uint8_t hp = 4;
-    if (choice == 1) { type = 30; hp = 10; }
-    else if (choice == 2) { type = 100; hp = 10; }
-    else if (choice == 3) { type = 111; hp = 8; }
-    spawnMob(type, mob_x, mob_y, mob_z, hp);
-    broadcastMobSpawn_(type, mob_x, mob_y, mob_z);
-  } else if (mob_y > 48) {
-    // 晚上地面: 动物和怪物都能生成
-    uint32_t choice = (r >> 12) & 7;
-    if (choice <= 3) {
-      // 50% 概率生成动物
-      uint8_t type = 26; uint8_t hp = 4;
-      if (choice == 1) { type = 30; hp = 10; }
-      else if (choice == 2) { type = 100; hp = 10; }
-      else if (choice == 3) { type = 111; hp = 8; }
-      spawnMob(type, mob_x, mob_y, mob_z, hp);
-      broadcastMobSpawn_(type, mob_x, mob_y, mob_z);
-    } else {
-      // 50% 概率生成敌对: 僵尸/骷髅/蜘蛛
-      uint8_t hostile_choice = (r >> 16) & 3;
-      uint8_t type = 150; uint8_t hp = 20;  // zombie
-      if (hostile_choice == 1) { type = 115; hp = 20; }  // skeleton
-      else if (hostile_choice == 2) { type = 124; hp = 16; }  // spider
-      spawnMob(type, mob_x, mob_y, mob_z, hp);
-      broadcastMobSpawn_(type, mob_x, mob_y, mob_z);
+    if (player->y > 60) {
+        int16_t mob_x = 8 + ((fast_rand() & 15) - 7);
+        int16_t mob_z = 8 + ((fast_rand() & 15) - 7);
+        uint8_t mob_y = getHeightAt(mob_x, mob_z) + 1;
+        if (mob_y < 5) mob_y = 5;
+        
+        uint32_t r = fast_rand();
+        uint8_t type = 26; 
+        uint8_t hp = 4;
+        if ((r & 3) == 1) { type = 30; hp = 10; }
+        else if ((r & 3) == 2) { type = 100; hp = 10; }
+        else if ((r & 3) == 3) { type = 111; hp = 8; }
+        spawnMob(type, mob_x, mob_y, mob_z, hp);
+        broadcastMobSpawn_(type, mob_x, mob_y, mob_z);
+        return;
     }
-  } else {
-    // 地下: 僵尸/骷髅/蜘蛛
-    uint8_t hostile_choice = (r >> 16) & 3;
-    uint8_t type = 150; uint8_t hp = 20;
-    if (hostile_choice == 1) { type = 115; hp = 20; }
-    else if (hostile_choice == 2) { type = 124; hp = 16; }
-    spawnMob(type, mob_x, mob_y, mob_z, hp);
-    broadcastMobSpawn_(type, mob_x, mob_y, mob_z);
-  }
+    uint32_t r = fast_rand();
+    if ((r & 3) != 0) return;
+
+    int16_t cx = div_floor(player->x, 16);
+    int16_t cz = div_floor(player->z, 16);
+    int16_t mob_x = (cx + ((r & 1) ? ACTIVE_VIEW_DISTANCE : -ACTIVE_VIEW_DISTANCE)) * 16 + ((r >> 4) & 15);
+    int16_t mob_z = (cz + ((r & 2) ? ACTIVE_VIEW_DISTANCE : -ACTIVE_VIEW_DISTANCE)) * 16 + ((r >> 8) & 15);
+    uint8_t mob_y = getHeightAt(mob_x, mob_z) + 1;
+    if (mob_y < 5) mob_y = 5;
+
+    for (int tries = 0; tries < 20; tries++) {
+        uint8_t b_low = getBlockAt(mob_x, mob_y - 1, mob_z);
+        uint8_t b_mid = getBlockAt(mob_x, mob_y, mob_z);
+        uint8_t b_top = getBlockAt(mob_x, mob_y + 1, mob_z);
+        if (!isPassableBlock(b_low) && isPassableSpawnBlock(b_mid) && isPassableSpawnBlock(b_top)) break;
+        mob_y++;
+        if (mob_y > 250) return;
+    }
+
+    if ((world_time < 13000 || world_time > 23460) && mob_y > 48) {
+        uint32_t choice = (r >> 12) & 3;
+        uint8_t type = 26; uint8_t hp = 4;
+        if (choice == 1) { type = 30; hp = 10; }
+        else if (choice == 2) { type = 100; hp = 10; }
+        else if (choice == 3) { type = 111; hp = 8; }
+        spawnMob(type, mob_x, mob_y, mob_z, hp);
+        broadcastMobSpawn_(type, mob_x, mob_y, mob_z);
+    } else if (mob_y > 48) {
+        uint32_t choice = (r >> 12) & 7;
+        if (choice <= 3) {
+            uint8_t type = 26; uint8_t hp = 4;
+            if (choice == 1) { type = 30; hp = 10; }
+            else if (choice == 2) { type = 100; hp = 10; }
+            else if (choice == 3) { type = 111; hp = 8; }
+            spawnMob(type, mob_x, mob_y, mob_z, hp);
+            broadcastMobSpawn_(type, mob_x, mob_y, mob_z);
+        } else {
+            uint8_t hostile_choice = (r >> 16) & 3;
+            uint8_t type = 150; uint8_t hp = 20;
+            if (hostile_choice == 1) { type = 115; hp = 20; }
+            else if (hostile_choice == 2) { type = 124; hp = 16; }
+            spawnMob(type, mob_x, mob_y, mob_z, hp);
+            broadcastMobSpawn_(type, mob_x, mob_y, mob_z);
+        }
+    } else {
+        uint8_t hostile_choice = (r >> 16) & 3;
+        uint8_t type = 150; uint8_t hp = 20;
+        if (hostile_choice == 1) { type = 115; hp = 20; }
+        else if (hostile_choice == 2) { type = 124; hp = 16; }
+        spawnMob(type, mob_x, mob_y, mob_z, hp);
+        broadcastMobSpawn_(type, mob_x, mob_y, mob_z);
+    }
 }
 
 void MinecraftServer::broadcastMobSpawn_(uint8_t type, int16_t x, uint8_t y, int16_t z) {
-  int mob_idx = -1;
-  for (int i = 0; i < MAX_MOBS; i++) {
-    if (mob_data[i].type == type && mob_data[i].x == x && mob_data[i].y == y && mob_data[i].z == z) {
-      mob_idx = i; break;
+    int mob_idx = -1;
+    for (int i = 0; i < MAX_MOBS; i++) {
+        if (mob_data[i].type == type && mob_data[i].x == x && mob_data[i].y == y && mob_data[i].z == z) {
+            mob_idx = i; break;
+        }
     }
-  }
-  if (mob_idx < 0) return;
+    if (mob_idx < 0) return;
 
-  uint8_t uuid[16];
-  uint32_t r = fast_rand();
-  memcpy(uuid, &r, 4);
-  memcpy(uuid + 4, &mob_idx, 4);
-  memset(uuid + 8, 0, 8);
+    uint8_t uuid[16];
+    uint32_t r = fast_rand();
+    memcpy(uuid, &r, 4);
+    memcpy(uuid + 4, &mob_idx, 4);
+    memset(uuid + 8, 0, 8);
+    uint8_t ground_y = getHeightAt(x, z) + 1;
+    if (ground_y < 5) ground_y = 5;
+    if (y > ground_y + 10 || y < ground_y - 5) {
+        y = ground_y;
+        mob_data[mob_idx].y = y;
+    }
 
-  for (uint8_t j = 0; j < kMaxClients; j++) {
-    if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
-    PacketCodec oc(clients_[j].fd);
-    sendSpawnEntity_(oc, -2 - mob_idx, uuid, type, x + 0.5, y, z + 0.5, 0, 0);
-  }
+    for (uint8_t j = 0; j < kMaxClients; j++) {
+        if (!clients_[j].used || clients_[j].state != STATE_PLAY) continue;
+        PacketCodec oc(clients_[j].fd);
+        sendSpawnEntity_(oc, -2 - mob_idx, uuid, type, x + 0.5, y, z + 0.5, 0, 0);
+    }
 }
 
 // ============================================================
@@ -2025,23 +2263,41 @@ bool MinecraftServer::sendSetHeldItem_(PacketCodec& codec, uint8_t slot) {
   return codec.writeVarInt(pkt_len) && codec.writeVarInt(0x69) && codec.writeByte(slot);
 }
 
-// mc_server.cpp
+//处理负数 window_id
 bool MinecraftServer::sendSetContainerSlot_(PacketCodec& codec, int window_id, uint16_t slot, uint8_t count, uint16_t item) {
+    // ====== 先检查 slot ======
     if (slot >= 46) {
-        Serial.printf("[WARN] sendSetContainerSlot: invalid slot %d, window %d, count %d, item %d\n", 
-                      slot, window_id, count, item);
-        return true;  // 返回 true 让调用方认为成功，但实际没发任何数据
+        Serial.printf("[ERROR] sendSetContainerSlot_: slot=%d out of range\n", slot);
+        return true;
     }
     
-    // ====== 正常发送 ======
-    uint32_t pkt_len = 1 + codec.sizeVarInt((uint32_t)window_id) + 1 + 2 + codec.sizeVarInt(count) +
-                       (count > 0 ? codec.sizeVarInt(item) + 2 : 0);
-    if (!codec.writeVarInt(pkt_len) || !codec.writeByte(0x14)) return false;
-    if (!codec.writeVarInt((uint32_t)window_id) || !codec.writeVarInt(0) || !codec.writeUint16(slot)) return false;
-    if (!codec.writeVarInt(count)) return false;
-    if (count > 0) {
-        if (!codec.writeVarInt(item) || !codec.writeVarInt(0) || !codec.writeVarInt(0)) return false;
+    // 如果 count 为 0，item 必须为 0
+    if (count == 0) {
+        item = 0;
     }
+    
+    uint32_t w_id = (uint32_t)window_id;
+    
+    uint32_t pkt_len = 1 + codec.sizeVarInt(w_id) + 1 + 2 + codec.sizeVarInt(count);
+    if (count > 0) {
+        pkt_len += codec.sizeVarInt(item) + 2;
+    }
+    
+    if (pkt_len == 0) return true;
+    
+    if (!codec.writeVarInt(pkt_len)) return false;
+    if (!codec.writeByte(0x14)) return false;
+    if (!codec.writeVarInt(w_id)) return false;
+    if (!codec.writeVarInt(0)) return false;
+    if (!codec.writeUint16(slot)) return false;
+    if (!codec.writeVarInt(count)) return false;
+    
+    if (count > 0) {
+        if (!codec.writeVarInt(item)) return false;
+        if (!codec.writeVarInt(0)) return false;
+        if (!codec.writeVarInt(0)) return false;
+    }
+    
     return true;
 }
 
@@ -2178,8 +2434,10 @@ bool MinecraftServer::sendChunkDataAndUpdateLight_(PacketCodec& codec, int chunk
     static const int EMPTY_BELOW = 4;
     static const int GEN_SECTIONS = 6;
     static const int EMPTY_ABOVE = TOTAL_SECTIONS - EMPTY_BELOW - GEN_SECTIONS;
-    static const int SKY_LIGHT_SECTIONS = 26;
-    static const int DARK_SECTIONS = 8;
+    
+    // ====== 光照参数修复 ======
+    static const int SKY_LIGHT_SECTIONS = 18;  // 天空光层数
+    static const int DARK_SECTIONS = 6;        // 黑暗层数（洞穴深度）
     static const int BRIGHT_SECTIONS = SKY_LIGHT_SECTIONS - DARK_SECTIONS;
 
     int cx = chunk_x * 16, cz = chunk_z * 16;
@@ -2230,9 +2488,8 @@ bool MinecraftServer::sendChunkDataAndUpdateLight_(PacketCodec& codec, int chunk
     int data_len_size = codec.sizeVarInt((uint32_t)chunk_data_size);
     uint32_t total_pkt_len = pkt_id_size + 4 + 4 + 1 + data_len_size + chunk_data_size + 1 + light_data_size;
 
-    // ====== 如果总长度为 0 或过大，发送空区块 ======
+    // ====== 空区块处理 ======
     if (total_pkt_len <= 0 || total_pkt_len > 2000000) {
-        // 空区块：12 字节
         codec.writeVarInt(12);
         codec.writeVarInt(0x2D);
         codec.writeUint32((uint32_t)chunk_x);
@@ -2251,13 +2508,13 @@ bool MinecraftServer::sendChunkDataAndUpdateLight_(PacketCodec& codec, int chunk
     if (!codec.writeVarInt(0)) return false;
     if (!codec.writeVarInt((uint32_t)chunk_data_size)) return false;
 
-    // 底部 bedrock sections
+    // ====== 底部 bedrock sections ======
     for (int i = 0; i < EMPTY_BELOW; i++) {
         if (!codec.writeUint16(4096) || !codec.writeUint16(0) || !codec.writeByte(0)) return false;
         if (!codec.writeVarInt(block_palette[B_bedrock]) || !codec.writeByte(0) || !codec.writeByte(0)) return false;
     }
 
-    // 生成的 sections
+    // ====== 生成的 sections ======
     for (int sec = 0; sec < GEN_SECTIONS; sec++) {
         uint8_t biome = buildChunkSection(cx, sec * 16, cz);
         uint16_t palette_index[256]; 
@@ -2335,20 +2592,33 @@ bool MinecraftServer::sendChunkDataAndUpdateLight_(PacketCodec& codec, int chunk
         yield();
     }
 
-    // 顶部空气 sections
+    // ====== 顶部空气 sections ======
     for (int i = 0; i < EMPTY_ABOVE; i++) {
         if (!codec.writeUint16(0) || !codec.writeUint16(0) || !codec.writeByte(0)) return false;
         if (!codec.writeVarInt(block_palette[B_air]) || !codec.writeByte(0) || !codec.writeByte(0)) return false;
     }
     if (!codec.writeVarInt(0)) return false;
 
-    // 光照数据
-    uint64_t sky_light_mask = ((1ULL << SKY_LIGHT_SECTIONS) - 1) & ~((1ULL << DARK_SECTIONS) - 1);
-    uint64_t empty_sky_mask = (1ULL << DARK_SECTIONS) - 1;
+    // ====== 光照数据（修复版） ======
+    // 重新计算光照掩码
+    uint64_t sky_light_mask = 0;
+    uint64_t empty_sky_mask = 0;
+
+    // 前 DARK_SECTIONS 层（y=0~63）无天空光
+    for (int i = 0; i < DARK_SECTIONS; i++) {
+        empty_sky_mask |= (1ULL << i);
+    }
+    // 后 BRIGHT_SECTIONS 层（y=64~255）有天空光
+    for (int i = DARK_SECTIONS; i < SKY_LIGHT_SECTIONS; i++) {
+        sky_light_mask |= (1ULL << i);
+    }
+
     if (!codec.writeVarInt(1) || !codec.writeUint64(sky_light_mask)) return false;
     if (!codec.writeVarInt(0)) return false;
     if (!codec.writeVarInt(1) || !codec.writeUint64(empty_sky_mask)) return false;
     if (!codec.writeVarInt(0)) return false;
+
+    // 发送天空光数据（只有 BRIGHT_SECTIONS 层有数据）
     if (!codec.writeVarInt(BRIGHT_SECTIONS)) return false;
     memset(chunk_section, 0xFF, 2048);
     for (int i = 0; i < BRIGHT_SECTIONS; i++) {
@@ -2357,7 +2627,7 @@ bool MinecraftServer::sendChunkDataAndUpdateLight_(PacketCodec& codec, int chunk
     }
     if (!codec.writeVarInt(0)) return false;
 
-    // 发送区块改动
+    // ====== 发送区块改动 ======
     for (int i = 0; i < block_changes_count; i++) {
         if (block_changes[i].block == 0xFF) continue;
         int bx = block_changes[i].x, bz = block_changes[i].z;
@@ -2423,7 +2693,6 @@ void MinecraftServer::processDeferredChunks_(uint8_t slot_index) {
         pc.writeDouble(0.1);         // base value
         pc.writeVarInt(0);           // 0 modifiers
       }
-      player->flags &= ~0x20;
     }
     return;
   }

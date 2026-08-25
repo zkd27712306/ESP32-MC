@@ -1839,4 +1839,7 @@ uint8_t I_to_B (uint16_t item); // 物品到方块
 #define D_wither 48
 #define D_wither_skull 49
 
+// 方块ID扩展
+#define B_netherite_block 255
+
 #endif

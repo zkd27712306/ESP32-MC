@@ -43,4 +43,10 @@ void spawnMob(uint8_t type, int16_t x, uint8_t y, int16_t z, uint8_t health);
 uint8_t serverSlotToClientSlot(int window_id, uint8_t slot);
 uint8_t clientSlotToServerSlot(int window_id, uint8_t slot);
 
+// ============ 护甲系统 ============
+uint8_t getArmorPoints(uint16_t item);
+uint8_t getArmorToughness(uint16_t item);
+uint8_t calculateTotalArmor(PlayerData* player);
+uint8_t applyArmorReduction(PlayerData* player, uint8_t damage);
+
 #endif

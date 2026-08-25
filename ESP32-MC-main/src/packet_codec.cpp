@@ -166,13 +166,26 @@ bool PacketCodec::readVarInt(int32_t& value) {
 }
 
 bool PacketCodec::writeVarInt(uint32_t value) {
-  uint8_t out[5]; size_t len = 0;
-  do { uint8_t byte = value & SEGMENT_BITS; value >>= 7; if (value) byte |= CONTINUE_BIT; out[len++] = byte; } while (value);
-  return writeExact(out, len);
+    uint8_t out[5];
+    size_t len = 0;
+    do {
+        uint8_t byte = value & 0x7F;
+        value >>= 7;
+        if (value) byte |= 0x80;
+        out[len++] = byte;
+    } while (value);
+    
+    if (len == 0) return true;
+    return writeExact(out, len);
 }
 
 int PacketCodec::sizeVarInt(uint32_t value) const {
-  int size = 1; while ((value & ~SEGMENT_BITS) != 0) { value >>= 7; size++; } return size;
+    int size = 1;
+    while ((value & ~0x7F) != 0) {
+        value >>= 7;
+        size++;
+    }
+    return size;
 }
 
 bool PacketCodec::readString(char* out, size_t out_len) {

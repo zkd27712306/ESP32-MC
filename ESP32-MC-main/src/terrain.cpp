@@ -8,29 +8,41 @@
 
 uint8_t chunk_section[4096];
 
-// ====== 以下所有函数保持不变 ======
+// ====== 获取随机世界种子 ======
+uint32_t getWorldSeed() {
+    static uint32_t seed = 0;
+    if (seed == 0) {
+        seed = esp_random();
+        seed ^= (uint32_t)micros() << 16;
+        seed ^= (uint32_t)millis() << 8;
+        seed ^= (uint32_t)rng_seed;
+        if (seed == 0) seed = 0xDEADBEEF;
+    }
+    return seed;
+}
 
 uint32_t getChunkHash(int16_t x, int16_t z) {
-  uint8_t buf[8];
-  memcpy(buf, &x, 2);
-  memcpy(buf + 2, &z, 2);
-  memcpy(buf + 4, &world_seed, 4);
-  return (uint32_t)splitmix64(*((uint64_t *)buf));
+    uint8_t buf[8];
+    uint32_t seed = getWorldSeed();
+    memcpy(buf, &x, 2);
+    memcpy(buf + 2, &z, 2);
+    memcpy(buf + 4, &seed, 4);
+    return (uint32_t)splitmix64(*((uint64_t *)buf));
 }
 
 uint8_t getChunkBiome(int16_t x, int16_t z) {
-  x += BIOME_RADIUS;
-  z += BIOME_RADIUS;
-  int8_t dx = BIOME_RADIUS - mod_abs(x, BIOME_SIZE);
-  int8_t dz = BIOME_RADIUS - mod_abs(z, BIOME_SIZE);
-  if (dx * dx + dz * dz > BIOME_RADIUS * BIOME_RADIUS) return W_beach;
-  int16_t biome_x = div_floor(x, BIOME_SIZE);
-  int16_t biome_z = div_floor(z, BIOME_SIZE);
-  uint8_t index = abs((biome_x & 3) + ((biome_z * 4) & 15));
-  static const uint8_t biome_lookup[4] = {
-    W_plains, W_mangrove_swamp, W_desert, W_snowy_plains
-  };
-  return biome_lookup[(world_seed >> (index * 2)) & 3];
+    x += BIOME_RADIUS;
+    z += BIOME_RADIUS;
+    int8_t dx = BIOME_RADIUS - mod_abs(x, BIOME_SIZE);
+    int8_t dz = BIOME_RADIUS - mod_abs(z, BIOME_SIZE);
+    if (dx * dx + dz * dz > BIOME_RADIUS * BIOME_RADIUS) return W_beach;
+    int16_t biome_x = div_floor(x, BIOME_SIZE);
+    int16_t biome_z = div_floor(z, BIOME_SIZE);
+    uint8_t index = abs((biome_x & 3) + ((biome_z * 4) & 15));
+    static const uint8_t biome_lookup[4] = {
+        W_plains, W_mangrove_swamp, W_desert, W_snowy_plains
+    };
+    return biome_lookup[(getWorldSeed() >> (index * 2)) & 3];
 }
 
 static uint8_t getCornerHeight(uint32_t hash, uint8_t biome) {

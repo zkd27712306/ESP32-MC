@@ -1,6 +1,7 @@
 #include "procedures.h"
 #include "game_state.h"
 #include "registries.h"
+#include "packet_codec.h"
 #include "terrain.h"
 #include <string.h>
 #include <stdint.h>
@@ -11,7 +12,6 @@ void (*g_sync_slot_cb)(int fd, int slot, uint8_t count, uint16_t item) = nullptr
 int g_slot_fd_map[MAX_PLAYERS] = {-1, -1, -1, -1, -1};
 
 // ============ 方块改动 ============
-
 uint8_t getBlockChange(int16_t x, uint8_t y, int16_t z) {
   for (int i = 0; i < block_changes_count; i++) {
     if (block_changes[i].block == 0xFF) continue;
@@ -191,8 +191,8 @@ void resetPlayerData(PlayerData *player) {
   player->inventory_items[3] = I_stone_shovel;   player->inventory_count[3] = 1;
   player->inventory_items[4] = I_stone_hoe;      player->inventory_count[4] = 1;
   player->inventory_items[5] = I_oak_log;        player->inventory_count[5] = 64;
-  player->inventory_items[6] = I_stone;          player->inventory_count[6] = 64;
-  player->inventory_items[7] = I_cooked_porkchop; player->inventory_count[7] = 64;
+  player->inventory_items[6] = I_cooked_porkchop;          player->inventory_count[6] = 64;
+  player->inventory_items[7] = I_torch; player->inventory_count[7] = 64;
 }
 
 int reservePlayerData(int client_fd, uint8_t *uuid, char *name) {
@@ -387,4 +387,73 @@ void spawnMob(uint8_t type, int16_t x, uint8_t y, int16_t z, uint8_t health) {
     mob_data[i].data = health & 31;
     break;
   }
+}
+
+// ============ 护甲系统 ============
+
+uint8_t getArmorPoints(uint16_t item) {
+    switch (item) {
+        case I_leather_helmet: return 1;
+        case I_leather_chestplate: return 3;
+        case I_leather_leggings: return 2;
+        case I_leather_boots: return 1;
+        case I_golden_helmet: return 2;
+        case I_golden_chestplate: return 5;
+        case I_golden_leggings: return 3;
+        case I_golden_boots: return 1;
+        case I_iron_helmet: return 2;
+        case I_iron_chestplate: return 6;
+        case I_iron_leggings: return 5;
+        case I_iron_boots: return 2;
+        case I_diamond_helmet: return 3;
+        case I_diamond_chestplate: return 8;
+        case I_diamond_leggings: return 6;
+        case I_diamond_boots: return 3;
+        case I_netherite_helmet: return 3;
+        case I_netherite_chestplate: return 8;
+        case I_netherite_leggings: return 6;
+        case I_netherite_boots: return 3;
+        default: return 0;
+    }
+}
+
+uint8_t getArmorToughness(uint16_t item) {
+    switch (item) {
+        case I_diamond_helmet: case I_diamond_chestplate:
+        case I_diamond_leggings: case I_diamond_boots:
+            return 2;
+        case I_netherite_helmet: case I_netherite_chestplate:
+        case I_netherite_leggings: case I_netherite_boots:
+            return 3;
+        default: return 0;
+    }
+}
+
+uint8_t calculateTotalArmor(PlayerData* player) {
+    uint8_t total = 0;
+    for (int i = 36; i < 40; i++) {
+        total += getArmorPoints(player->inventory_items[i]);
+    }
+    return total;
+}
+
+uint8_t applyArmorReduction(PlayerData* player, uint8_t damage) {
+    uint8_t armor = calculateTotalArmor(player);
+    if (armor == 0) return damage;
+    
+    float reduction = armor * 0.04f;
+    if (reduction > 0.8f) reduction = 0.8f;
+    
+    uint8_t toughness = 0;
+    for (int i = 36; i < 40; i++) {
+        toughness += getArmorToughness(player->inventory_items[i]);
+    }
+    if (toughness > 0) {
+        float toughness_factor = 1.0f + (toughness / 25.0f);
+        reduction = reduction * toughness_factor;
+        if (reduction > 0.8f) reduction = 0.8f;
+    }
+    
+    uint8_t reduced = (uint8_t)(damage * (1.0f - reduction));
+    return reduced > 0 ? reduced : 1;
 }
