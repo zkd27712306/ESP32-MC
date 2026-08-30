@@ -1,6 +1,6 @@
 # ESP32MC Server
 
-在[ESP32-MC](https://github.com/GYGKHD/ESP32-MC)基础上进行优化，解决很多bug（合成时崩溃等），新增部分功能（!give命令）。
+在[ESP32-MC](https://github.com/GYGKHD/ESP32-MC)基础上进行优化，解决很多bug（合成时崩溃，发送空区块等），新增部分功能（!give命令）。
 ## 开源许可与来源
 - 原项目作者：GYGKHD及所有参与代码修改的贡献者
 - 原项目许可证：GPL-3.0
@@ -97,7 +97,6 @@
 - [`ESP32-MC-main/src/game_state.cpp`](ESP32-MC-main/src/game_state.cpp)：全局游戏状态
 - [`ESP32-MC-main/src/game_types.h`](ESP32-MC-main/src/game_types.h)：主要常量、开关和数据结构
 - [`ESP32-MC-main/src/registries.cpp`](ESP32-MC-main/src/registries.cpp)：协议注册表和相关大体积数据
-- [`ESP32-MC-main/src/wifi_config.cpp`](ESP32-MC-main/src/wifi_config.cpp)：WiFi 保存和串口配网逻辑（当前未使用）
 
 ## 开发说明
 
