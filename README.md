@@ -55,17 +55,17 @@
 - 视距：`2`
 - 默认端口：`25565`
 
-这些值和多数开关定义都在 [`ESP32-MC-main/src/game_types.h`](ESP32-MC-main/src/game_types.h)。
+这些值和多数开关定义都在 [`ESP32S3-MC-main/src/game_types.h`](ESP32S3-MC-main/src/game_types.h)。
 
 ## 运行方式
 
 ### 在 ESP32S3 上运行
 
-默认入口是 [`ESP32-MC-main/src/code.ino`](ESP32-MC-main/src/code.ino)。
+默认入口是 [`ESP32S3-MC-main/src/code.ino`](ESP32S3-MC-main/src/code.ino)。
 
 大致流程：
 
-1. 用 Visual Studio Code打开 ESP32-MC-main/src/ 目录
+1. 用 Visual Studio Code打开 ESP32S3-MC-main/src/ 目录
 2. 安装 PlatformIO，并在 platformio.ini 中设置开发板型号（如 esp32-s3-devkitc-1）
 3. 编译并烧录
 4. 设备启动后会打开一个名为ESP32-MC的wifi
@@ -78,7 +78,7 @@
 
 ### WiFi 配置
 
-当前可用的稳定方式是热点连接，相关实现见 [`ESP32-MC-main/src/code.ino`](ESP32-MC-main/src/code.ino) 。
+当前可用的稳定方式是热点连接，相关实现见 [`ESP32S3-MC-main/src/code.ino`](ESP32S3-MC-main/src/code.ino) 。
 
 基本用法：
 
@@ -86,22 +86,22 @@
 
 ## 目录结构
 
-当前主要代码都在 `ESP32-MC-main/src/` 目录下：
+当前主要代码都在 `ESP32S3-MC-main/src/` 目录下：
 
-- [`ESP32-MC-main/src/code.ino`](ESP32-MC-main/src/code.ino)：Arduino 入口，初始化串口、WiFi、LED 和主循环
-- [`ESP32-MC-main/src/mc_server.cpp`](ESP32-MC-main/src/mc_server.cpp)：服务器主体，连接管理、协议状态机、主要游戏逻辑
-- [`ESP32-MC-main/src/packet_codec.cpp`](ESP32-MC-main/src/packet_codec.cpp)：Minecraft 数据包编解码
-- [`ESP32-MC-main/src/network_layer.cpp`](ESP32-MC-main/src/network_layer.cpp)：ESP32 网络层封装
-- [`ESP32-MC-main/src/procedures.cpp`](ESP32-MC-main/src/procedures.cpp)：玩家行为、方块交互、Mob 和 Tick 相关逻辑
-- [`ESP32-MC-main/src/terrain.cpp`](ESP32-MC-main/src/terrain.cpp)：地形、区块和基础结构生成
-- [`ESP32-MC-main/src/crafting.cpp`](ESP32-MC-main/src/crafting.cpp)：合成和熔炉逻辑
-- [`ESP32-MC-main/src/game_state.cpp`](ESP32-MC-main/src/game_state.cpp)：全局游戏状态
-- [`ESP32-MC-main/src/game_types.h`](ESP32-MC-main/src/game_types.h)：主要常量、开关和数据结构
-- [`ESP32-MC-main/src/registries.cpp`](ESP32-MC-main/src/registries.cpp)：协议注册表和相关大体积数据
-- [`ESP32-MC-main/src/wifi_config.cpp`](ESP32-MC-main/src/wifi_config.cpp)：WiFi 保存和串口配网逻辑（当前未使用）
+- [`ESP32S3-MC-main/src/code.ino`](ESP32S3-MC-main/src/code.ino)：Arduino 入口，初始化串口、WiFi、LED 和主循环
+- [`ESP32S3-MC-main/src/mc_server.cpp`](ESP32S3-MC-main/src/mc_server.cpp)：服务器主体，连接管理、协议状态机、主要游戏逻辑
+- [`ESP32S3-MC-main/src/packet_codec.cpp`](ESP32S3-MC-main/src/packet_codec.cpp)：Minecraft 数据包编解码
+- [`ESP32S3-MC-main/src/network_layer.cpp`](ESP32S3-MC-main/src/network_layer.cpp)：ESP32 网络层封装
+- [`ESP32S3-MC-main/src/procedures.cpp`](ESP32S3-MC-main/src/procedures.cpp)：玩家行为、方块交互、Mob 和 Tick 相关逻辑
+- [`ESP32S3-MC-main/src/terrain.cpp`](ESP32S3-MC-main/src/terrain.cpp)：地形、区块和基础结构生成
+- [`ESP32S3-MC-main/src/crafting.cpp`](ESP32S3-MC-main/src/crafting.cpp)：合成和熔炉逻辑
+- [`ESP32S3-MC-main/src/game_state.cpp`](ESP32S3-MC-main/src/game_state.cpp)：全局游戏状态
+- [`ESP32S3-MC-main/src/game_types.h`](ESP32S3-MC-main/src/game_types.h)：主要常量、开关和数据结构
+- [`ESP32S3-MC-main/src/registries.cpp`](ESP32S3-MC-main/src/registries.cpp)：协议注册表和相关大体积数据
+- [`ESP32S3-MC-main/src/wifi_config.cpp`](ESP32S3-MC-main/src/wifi_config.cpp)：WiFi 保存和串口配网逻辑（当前未使用）
 
 ## 开发说明
 
-- 当前主线代码以 `ESP32-MC-main/src` 为准。
+- 当前主线代码以 `ESP32S3-MC-main/src` 为准。
 - `registries.cpp / registries.h` 体积较大，主要是协议相关的静态数据
 - 这个项目的很多设计是为了节省资源和简化调试，不一定追求常见服务端那种完整抽象
